@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Haunted House Zombie Aim Trainer</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #0b0914;
+            font-family: 'Courier New', Courier, monospace;
+        }
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+            cursor: crosshair;
+        }
+    </style>
+</head>
+<body>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        // --- AUDIO ENGINE CONFIGURATION ---
+        const bgMusic = new Audio('bgmusic.mp3');
+        bgMusic.loop = true;       
+        bgMusic.volume = 0.4;      
+
+        function playGunshot() {
+            const shotSound = new Audio('Gunshot.mp3');
+            shotSound.volume = 0.7;
+            shotSound.play().catch(err => console.log("Audio play blocked."));
+        }
+
+        // --- IMAGE PRE-LOADER ENGINE ---
+        const images = {};
+        const imageSources = {
+            background: 'hunted-house.jpg',
+            pistol: 'pistol.jpg',
+            zombie1: 'zombie.jpg',
+            zombie2: 'zombie2.jpg',
+            zombie3: 'zombie3.jpg',
+            flash: 'gunshot.jpg', // FIXED: Extension changed to .jpg
+            life: 'life.png'
+        };
+
+        // Load images background-style without locking the game thread
+        for (let key in imageSources) {
+            images[key] = new Image();
+            images[key].src = imageSources[key];
+        }
+
+        // Core Game States
+        let score = 0;
+        let totalClicks = 0;
+        let accuracy = 100;
+        let lives = 5;
+        let isGameOver = false;
+        let hasInteracted = false; 
+        
+        let gunYOffset = 0;
+        let isShooting = false;
+        let mouseX = canvas.width / 2;
+        let damageFlashTimer = 0;
+
+        // Zombie Target Object
+        let zombie = {
+            x: 0,
+            y: 0,
+            width: 140,  
+            height: 220, 
+            scale: 0.1,
+            currentImgKey: 'zombie1' 
+        };
+
+        function resetGame() {
+            score = 0;
+            totalClicks = 0;
+            accuracy = 100;
+            lives = 5;
+            isGameOver = false;
+            spawnZombie();
+        }
+
+        function spawnZombie() {
+            const padding = 150;
+            zombie.scale = 0.1; // Restarts small in the distance
+            
+            zombie.x = padding + Math.random() * (canvas.width - padding * 2);
+            zombie.y = (canvas.height * 0.4); // Positioned near the horizon
+
+            const zombieKeys = ['zombie1', 'zombie2', 'zombie3'];
+            zombie.currentImgKey = zombieKeys[Math.floor(Math.random() * zombieKeys.length)];
+        }
+
+        // Helper function to verify if image file successfully rendered
+        function isImageValid(img) {
+            return img && img.complete && img.naturalWidth !== 0;
+        }
+
+        // Safe vector fallback for drawing a heart if life.png fails to load
+        function drawFallbackHeart(x, y, size) {
+            ctx.fillStyle = '#ff3355';
+            ctx.beginPath();
+            ctx.arc(x - size/4, y, size/4, Math.PI, 0, false);
+            ctx.arc(x + size/4, y, size/4, Math.PI, 0, false);
+            ctx.lineTo(x, y + size/2);
+            ctx.closePath();
+            ctx.fill();
+        }
+
+        // --- DRAW ENGINE ---
+        function render() {
+            // 1. Draw Background
+            if (isImageValid(images.background)) {
+                ctx.drawImage(images.background, 0, 0, canvas.width, canvas.height);
+            } else {
+                ctx.fillStyle = '#151020';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = '#0a0710';
+                ctx.fillRect(0, 0, canvas.width, canvas.height * 0.5);
+            }
+
+            // 2. Draw Zombie (With Approach Scaling)
+            if (!isGameOver) {
+                ctx.save();
+                ctx.translate(zombie.x, zombie.y);
+                ctx.scale(zombie.scale, zombie.scale);
+
+                const cx = -zombie.width / 2;
+                const cy = -zombie.height / 2;
+
+                let activeZombieImg = images[zombie.currentImgKey];
+                if (isImageValid(activeZombieImg)) {
+                    ctx.drawImage(activeZombieImg, cx, cy, zombie.width, zombie.height);
+                } else {
+                    // Fallback Shape
+                    ctx.fillStyle = '#466b3d';
+                    ctx.fillRect(cx, cy, zombie.width, zombie.height);
+                }
+                ctx.restore();
+            }
+
+            // 3. Draw Pistol
+            const gunWidth = 260;  
+            const gunHeight = 320; 
+            const gunX = mouseX - gunWidth / 2;
+            const gunY = canvas.height - gunHeight + gunYOffset;
+
+            if (isImageValid(images.pistol)) {
+                ctx.drawImage(images.pistol, gunX, gunY, gunWidth, gunHeight);
+            } else {
+                ctx.fillStyle = '#26262e';
+                ctx.fillRect(mouseX - 40, canvas.height - 150 + gunYOffset, 80, 150);
+            }
+
+            // 4. Muzzle Flash Overlay
+            if (isShooting) {
+                if (isImageValid(images.flash)) {
+                    ctx.drawImage(images.flash, mouseX - 60, gunY - 60, 120, 120);
+                } else {
+                    ctx.fillStyle = 'rgba(255, 170, 0, 0.7)';
+                    ctx.beginPath();
+                    ctx.arc(mouseX, gunY, 50, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            }
+
+            // Damage flash effect overlay
+            if (damageFlashTimer > 0) {
+                ctx.fillStyle = `rgba(255, 0, 0, ${damageFlashTimer * 0.15})`;
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+            }
+
+            // 5. Draw Dashboard HUD Text
+            ctx.fillStyle = '#ebdcd0';
+            ctx.font = "bold 24px 'Courier New', monospace";
+            ctx.fillText(`ZOMBIES HUNTED: ${score}`, 35, 45);
+            ctx.fillText(`ACCURACY: ${accuracy}%`, 35, 75);
+            ctx.fillText(`SURVIVOR LIVES:`, 35, 105);
+            
+            // 6. Draw 5 Heart Icons
+            for (let i = 0; i < lives; i++) {
+                let heartX = 260 + (i * 35);
+                let heartY = 95;
+                if (isImageValid(images.life)) {
+                    ctx.drawImage(images.life, heartX - 12, heartY - 12, 24, 24);
+                } else {
+                    drawFallbackHeart(heartX, heartY, 24);
+                }
+            }
+            
+            if (!hasInteracted) {
+                ctx.font = "bold 14px 'Courier New', monospace";
+                ctx.fillText("(Click anywhere to activate game audio)", 35, 135);
+            }
+
+            // Game over screen handler overlay
+            if (isGameOver) {
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = '#ff3333';
+                ctx.font = "bold 40px 'Courier New', monospace";
+                ctx.fillText("YOU WERE OVERRUN!", canvas.width / 2 - 180, canvas.height / 2);
+                ctx.fillStyle = '#ebdcd0';
+                ctx.font = "bold 20px 'Courier New', monospace";
+                ctx.fillText("CLICK TO RESTART MISSION", canvas.width / 2 - 130, canvas.height / 2 + 50);
+            }
+        }
+
+        // --- ANIMATION TIMINGS & PHYSICS ---
+        function update() {
+            if (isGameOver) return;
+
+            if (damageFlashTimer > 0) damageFlashTimer--;
+
+            if (isShooting) {
+                gunYOffset += 25; 
+                if (gunYOffset >= 50) {
+                    isShooting = false;
+                }
+            } else {
+                gunYOffset = gunYOffset * 0.75; 
+            }
+
+            // Zombie Approach Logic: Grows larger over time
+            const baseSpeed = 0.004;
+            const difficultyMultiplier = 1 + (score * 0.1);
+            zombie.scale += baseSpeed * difficultyMultiplier;
+            zombie.y += (baseSpeed * difficultyMultiplier) * 100;
+
+            // Melee Threshold Check: If zombie reaches player
+            if (zombie.scale >= 1.8) {
+                lives--;
+                damageFlashTimer = 3;
+                if (lives <= 0) {
+                    isGameOver = true;
+                } else {
+                    spawnZombie();
+                }
+            }
+        }
+
+        function gameLoop() {
+            update();
+            render();
+            requestAnimationFrame(gameLoop);
+        }
+
+        // --- CONTROLS / INPUT EVENT LISTENERS ---
+        canvas.addEventListener('mousemove', (e) => {
+            mouseX = e.clientX; 
+        });
+
+        canvas.addEventListener('mousedown', (e) => {
+            if (!hasInteracted) {
+                hasInteracted = true;
+                bgMusic.play().catch(err => console.log("Music play error:", err));
+            }
+
+            if (isGameOver) {
+                resetGame();
+                return;
+            }
+
+            playGunshot();
+
+            totalClicks++;
+            isShooting = true;
+            gunYOffset = -30; 
+
+            const clickX = e.clientX;
+            const clickY = e.clientY;
+
+            const finalWidth = zombie.width * zombie.scale;
+            const finalHeight = zombie.height * zombie.scale;
+            
+            const minX = zombie.x - finalWidth / 2;
+            const maxX = zombie.x + finalWidth / 2;
+            const minY = zombie.y - finalHeight / 2;
+            const maxY = zombie.y + finalHeight / 2;
+
+            if (clickX >= minX && clickX <= maxX && clickY >= minY && clickY <= maxY) {
+                score++;
+                spawnZombie(); 
+            }
+
+            accuracy = Math.round((score / totalClicks) * 100);
+        });
+
+        // Run the game loop immediately!
+        resetGame();
+        gameLoop();
+    </script>
+</body>
+</html>
